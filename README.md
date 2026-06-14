@@ -7,7 +7,7 @@ Silicon) or NVIDIA GPU** (MLX / vLLM), or against **NemoStation hosted**
 inference with one env var.
 
 ```bash
-uv tool install marlin-cli            # or: pipx install marlin-cli
+uv tool install nemostation           # or: pipx install nemostation
 marlin setup                          # auto-detects Apple Silicon / NVIDIA / hosted
 marlin engine install                 # local only — builds the engine for your machine
 marlin index ./footage                # caption + embed (resume-safe)
@@ -45,7 +45,7 @@ hosted) — env always beats `~/.marlin/config.json`.
 ## Speech
 
 `marlin index --stt` adds faster-whisper speech rows to the same index
-(`pip install 'marlin-cli[stt]'`) — search meetings by what was *said* and
+(`pip install 'nemostation[stt]'`) — search meetings by what was *said* and
 what *happened* in one query.
 
 ## Status

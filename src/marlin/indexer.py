@@ -88,12 +88,12 @@ def _done_starts(done_tbl, video: str) -> set[float]:
 
 
 def _transcribe(chunk: Chunk) -> list[tuple[float, float, str]]:
-    """Optional STT on the raw chunk. Requires `pip install 'marlin-cli[stt]'`."""
+    """Optional STT on the raw chunk. Requires `pip install 'nemostation[stt]'`."""
     try:
         from faster_whisper import WhisperModel
     except ImportError:
         raise RuntimeError(
-            "speech indexing needs faster-whisper: pip install 'marlin-cli[stt]'"
+            "speech indexing needs faster-whisper: pip install 'nemostation[stt]'"
         ) from None
     global _WHISPER
     if _WHISPER is None:

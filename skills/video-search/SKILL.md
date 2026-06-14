@@ -82,7 +82,7 @@ Ask the user one question: **"Run Marlin locally (free, on your Apple Silicon / 
 | `401` / `403` | Bad/expired `MARLIN_API_KEY` → ask the user to check their key. |
 | `index is empty` | `marlin index <path>` first, or use `find --in <path>`. |
 | `no videos found` | Check the path; supported: mp4 mov mkv webm avi m4v, or a YouTube URL. |
-| `speech indexing needs faster-whisper` | `pip install 'marlin-cli[stt]'`. |
+| `speech indexing needs faster-whisper` | `pip install 'nemostation[stt]'`. |
 
 ## When NOT to use
 
