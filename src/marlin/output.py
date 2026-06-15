@@ -31,6 +31,34 @@ BRAND = Theme({
 console = Console(theme=BRAND)
 err_console = Console(stderr=True, theme=BRAND)
 
+# Brand spinner — a marlin swimming (design ②: mascot-as-motion). Registered
+# into Rich's spinner table so console.status(spinner="marlin", …) can use it.
+try:
+    from rich._spinners import SPINNERS
+
+    SPINNERS.setdefault("marlin", {
+        "interval": 110,
+        "frames": [
+            "><>      ", " ><>     ", "  ><>    ", "   ><>   ", "    ><>  ",
+            "     ><> ", "      ><>", "     <>< ", "    <><  ", "   <><   ",
+            "  <><    ", " <><     ", "<><      ",
+        ],
+    })
+except Exception:  # pragma: no cover — spinner is cosmetic; never block on it
+    pass
+
+# First-run / --version hero: the gradient block wordmark. Vertical fade from
+# splash-orange to accent-red; Rich auto-degrades on non-truecolor terminals
+# and honors NO_COLOR. Shown only by setup + version, never on hot-path.
+_HERO_LINES = (
+    "███╗   ███╗ █████╗ ██████╗ ██╗     ██╗███╗   ██╗",
+    "████╗ ████║██╔══██╗██╔══██╗██║     ██║████╗  ██║",
+    "██╔████╔██║███████║██████╔╝██║     ██║██╔██╗ ██║",
+    "██║╚██╔╝██║██╔══██║██╔══██╗██║     ██║██║╚██╗██║",
+    "██║ ╚═╝ ██║██║  ██║██║  ██║███████╗██║██║ ╚████║",
+)
+_HERO_GRADIENT = ("#FF644E", "#EF5747", "#DF4B40", "#CF3E38", "#BF3131")
+
 _FORCE_JSON = False
 
 
@@ -60,30 +88,33 @@ def status(msg: str) -> None:
 
 
 def banner() -> None:
-    """The marlin wordmark — human mode only (callers guard with emit/is_json).
+    """First-run / version hero — the gradient block wordmark (design ②).
 
-    Interim minimal mark: a clean coral wordmark, no ASCII art. The refined
-    visual identity is being chosen from CLI-design research; this placeholder
-    is deliberately plain so it never looks janky in the meantime.
+    Human mode only (callers guard with emit/is_json). Reserved for setup and
+    `version`; hot-path commands print no banner so piped/scripted output stays
+    clean.
     """
     console.print()
-    console.print("  [model]marlin[/model]  [muted]· video understanding, on your Mac[/muted]")
-    console.print("  [muted]NemoStation · Marlin-2B[/muted]")
+    for line, color in zip(_HERO_LINES, _HERO_GRADIENT):
+        console.print(f"  [{color}]{line}[/]")
+    console.print("  [muted]video understanding, on your Mac ·[/muted] [model]Marlin-2B[/model]")
     console.print()
 
 
 @contextmanager
-def spinner(title: str):
+def spinner(title: str, *, fish: bool = False):
     """Hide a slow, noisy step behind one clean live line.
 
-    Human mode: a coral dots-spinner on stderr whose label is swapped via the
-    yielded ``log(msg)``. Agent/JSON mode: plain dim stderr lines (no spinner,
-    no control codes to corrupt a piped log). Either way callers get a ``log``.
-    Success/failure lines are the caller's job, printed after the block.
+    Human mode: a spinner on stderr whose label is swapped via the yielded
+    ``log(msg)`` — a swimming marlin (splash-orange) when ``fish`` else calm
+    coral dots. Agent/JSON mode: plain dim stderr lines (no spinner, no control
+    codes to corrupt a piped log). Either way callers get a ``log``; success /
+    failure lines are the caller's job, printed after the block.
     """
     if is_json():
         err_console.print(f"[muted]{title}…[/muted]")
         yield lambda m: err_console.print(f"[muted]  {m}[/muted]")
     else:
-        with err_console.status(f"[model]{title}…[/model]", spinner="dots", spinner_style="model") as st:
+        name, style = ("marlin", "#FF644E") if fish else ("dots", "model")
+        with err_console.status(f"[model]{title}…[/model]", spinner=name, spinner_style=style) as st:
             yield lambda m: st.update(f"[model]{title} — {m}…[/model]")

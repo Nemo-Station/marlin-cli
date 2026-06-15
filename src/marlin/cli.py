@@ -13,7 +13,7 @@ from rich.table import Table
 
 from . import __version__, config as cfg_mod
 from .config import Config, DEFAULT_LOCAL_URL, DEFAULT_MODEL
-from .output import banner, console, emit, err_console, set_json
+from .output import banner, console, emit, err_console, set_json, spinner
 from .output import status as echo
 
 app = typer.Typer(add_completion=False, no_args_is_help=True, rich_markup_mode="rich")
@@ -375,7 +375,8 @@ def find(
         scope = str(common)
 
     try:
-        hits = run_search(cfg, query, k=k, scope=scope, ground=ground)
+        with spinner("finding the moment", fish=True):
+            hits = run_search(cfg, query, k=k, scope=scope, ground=ground)
     except RuntimeError as e:
         emit({"error": str(e)}, lambda: err_console.print(f"[err]{e}[/err]"))
         raise typer.Exit(1)
@@ -465,7 +466,10 @@ def skills_install(
 @app.command()
 def version():
     """Print version."""
-    emit({"version": __version__}, lambda: console.print(f"marlin {__version__}"))
+    def human():
+        banner()
+        console.print(f"  marlin [model]{__version__}[/model]\n")
+    emit({"version": __version__}, human)
 
 
 def main():
