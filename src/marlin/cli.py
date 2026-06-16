@@ -13,7 +13,7 @@ from rich.table import Table
 
 from . import __version__, config as cfg_mod
 from .config import Config, DEFAULT_LOCAL_URL, DEFAULT_MODEL
-from .output import banner, build_spinner, console, emit, err_console, is_json, set_json, spinner
+from .output import banner, build_spinner, console, emit, err_console, gated_notice, is_json, set_json, spinner
 from .output import status as echo
 
 app = typer.Typer(add_completion=False, rich_markup_mode="rich")
@@ -191,12 +191,11 @@ def _do_setup(
         else:
             console.print("  [muted]engine builds on your first search (or run: marlin engine install)[/muted]")
 
+        if eng == "mlx" and access is not True:
+            gated_notice(engines.MLX_ACCESS_URL)
+            return
         if eng == "mlx":
-            if access is True:
-                console.print("  [ok]✓[/ok] weights ready")
-            else:
-                console.print("  [warn]⚠[/warn] approve 1-click weight access (free):")
-                console.print(f"      [link]{engines.MLX_ACCESS_URL}[/link]")
+            console.print("  [ok]✓[/ok] weights ready")
         _next_steps()
 
     emit(result, human)
@@ -219,7 +218,7 @@ def setup(
 
 def _ready_clip(video: str):
     """Validate a single-clip path + ensure the local engine answers."""
-    from . import daemon
+    from . import daemon, engines
 
     cfg = _require_config()
     path = Path(video)
@@ -230,7 +229,11 @@ def _ready_clip(video: str):
     try:
         daemon.ensure_running(cfg, log=echo)
     except RuntimeError as e:
-        emit({"error": str(e)}, lambda: err_console.print(f"[err]{e}[/err]"))
+        if "gated" in str(e).lower():  # friendly form-link, not a red error wall
+            emit({"error": "weights_gated", "access_form": engines.MLX_ACCESS_URL},
+                 lambda: gated_notice(engines.MLX_ACCESS_URL))
+        else:
+            emit({"error": str(e)}, lambda: err_console.print(f"[err]{e}[/err]"))
         raise typer.Exit(2)
     return cfg, path
 

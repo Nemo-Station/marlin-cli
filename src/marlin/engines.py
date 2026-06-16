@@ -228,24 +228,26 @@ def install_mlx(log) -> None:
 # ── weight access ───────────────────────────────────────────────────────────────
 
 def weights_accessible(cfg: Config) -> bool | None:
-    """Can this user pull the gated MLX weights? True if yes, False if gated/denied,
-    None if undeterminable (no HF token, offline, hub not importable).
+    """Can this user actually DOWNLOAD the gated MLX weights? True yes, False if
+    gated-and-not-granted (or no token), None if undeterminable.
 
-    One cheap HF metadata call. Lets `setup` say "weights ready" for users who
-    already have access (e.g. the repo owner) instead of always nagging with the
-    access form. Best-effort: any failure to *determine* returns None, never raises.
+    Uses HfApi.auth_check, which tests *download* access. NOT model_info — gated
+    repos stay publicly visible, so model_info returns 200 for users who haven't
+    been granted access and would false-positive "weights ready" at setup, only
+    to 403 at first download. auth_check is the right gate. Never raises.
     """
     try:
         from huggingface_hub import HfApi, get_token
         from huggingface_hub.utils import GatedRepoError, RepositoryNotFoundError
     except Exception:
         return None
+    check = getattr(HfApi(), "auth_check", None)
+    if check is None:
+        return None  # hub too old to tell → setup prompts to be safe
     try:
-        HfApi().model_info(cfg.mlx_weights, token=get_token())
+        check(cfg.mlx_weights, token=get_token())
         return True
     except (GatedRepoError, RepositoryNotFoundError):
-        # gated-without-access returns 403 (GatedRepoError) or, when unauthenticated,
-        # a 404 that hides the repo's existence — both mean "no access yet".
         return False
     except Exception:
         return None
