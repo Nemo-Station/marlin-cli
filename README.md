@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/shu-bamma/marlin-cli/main/assets/marlin-wordmark.png" width="440" alt="Marlin — video understanding on your Mac"/>
+  <img src="https://raw.githubusercontent.com/shu-bamma/marlin-cli/main/assets/marlin-hero.png" width="500" alt="Marlin — video understanding on your Mac"/>
 </p>
 
 <p align="center">
