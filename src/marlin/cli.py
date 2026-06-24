@@ -198,6 +198,11 @@ def _do_setup(
             except RuntimeError as e:
                 build_error = str(e)
 
+    # Pre-fetch the weights now (progress bar) so setup leaves the machine fully
+    # ready and the first caption is instant — not racing the serve timeout.
+    if interactive and eng == "mlx" and not build_error and engines.engine_ready(eng):
+        engines.ensure_weights(cfg, echo)
+
     reachable = probe(cfg.base_url, cfg.api_key)
     ready = engines.engine_ready(eng)
 
@@ -438,6 +443,9 @@ def engine_install():
             emit({"error": str(e)},
                  lambda: err_console.print(f"  [err]✗ build failed[/err] — {str(e).strip().splitlines()[-1][:120]}"))
             raise typer.Exit(1)
+
+    # Actually fetch the weights so "weights ready" is true (progress bar, resumable).
+    engines.ensure_weights(cfg_mod.load(), echo)
 
     def human():
         console.print("  [ok]✓[/ok] engine ready" + (" [muted](already built)[/muted]" if already else ""))
