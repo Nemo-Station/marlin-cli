@@ -26,8 +26,8 @@ import urllib.request
 from .config import CONFIG_DIR
 
 SUPABASE_URL = os.environ.get("MARLIN_SUPABASE_URL", "https://iqjjodhgoohixngrlqaf.supabase.co").rstrip("/")
-# SAFETY: this MUST stay the `sb_publishable_` (anon) key — public by design,
-# guarded by RLS, safe to ship. NEVER put a `sb_secret_`/service_role key here.
+# SAFETY: this MUST stay the publishable (anon) key — public by design,
+# guarded by RLS, safe to ship. NEVER swap in a secret / service-role key.
 SUPABASE_KEY = os.environ.get("MARLIN_SUPABASE_KEY", "sb_publishable_BheDPS6J2QRE7bnyqzCyfA_KErwKoGp")
 AUTH_FILE = CONFIG_DIR / "auth.json"
 
