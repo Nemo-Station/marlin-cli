@@ -13,6 +13,7 @@ under ~/.marlin/engines/ by `marlin engine install`.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import platform
 import shutil
@@ -39,6 +40,22 @@ _WEIGHT_FILES = (
     "preprocessor_config.json", "processor_config.json",
     "tokenizer.json", "tokenizer_config.json",
 )
+# Pinned SHA256 of each weight file (the known-good model). The engine runs the
+# downloaded modeling_marlin.py via --trust-remote-code, so we verify every file
+# after download: a tampered mirror, a hijacked MARLIN_MLX_WEIGHTS_URL, or a
+# transient CDN corruption all fail closed → fall back to Hugging Face.
+_WEIGHT_SHA256 = {
+    "config.json": "d6ab48208818ce26017d65ab64b30f0c419227d4d219c69999305507e3584554",
+    "generation_config.json": "0d54a28c36c5143413aa18a910f661d17483909e87321f34ad58859b66cf25b4",
+    "chat_template.jinja": "273d8e0e683b885071fb17e08d71e5f2a5ddfb5309756181681de4f5a1822d80",
+    "model.safetensors": "0575deb6f9e9f68405979f4e7d4cf42f0361774f722a480180dff95d414466bf",
+    "model.safetensors.index.json": "83ee945a045012893ec93b0074510f4e581ac4130b7284307137ffeb35ba0ef2",
+    "modeling_marlin.py": "baec8f0a2cabf5d64a883d8b5ac1881a9119f91f2251e6964f45447d24b19733",
+    "preprocessor_config.json": "27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516",
+    "processor_config.json": "566b6b6ff98913f6b18295b03c03244875bf6c15f96db586d8b024060e54f0c3",
+    "tokenizer.json": "06b9509352d2af50381ab2247e083b80d32d5c0aba91c272ca9ff729b6a0e523",
+    "tokenizer_config.json": "792fa3f0cb88b111e54ef3134c873531008c4df471d108da17903426e308aa7b",
+}
 
 # Apple-Silicon multimodal SGLang support lives on this fork branch until upstream.
 SGLANG_FORK = "https://github.com/Itssshikhar/sglang"
@@ -155,23 +172,22 @@ def serve_command(cfg: Config, engine: str, port: int = LOCAL_PORT) -> tuple[lis
     raise ValueError(f"engine {engine!r} has no local server (hosted runs remotely)")
 
 
-def _remote_size(url: str) -> "int | None":
-    try:
-        r = subprocess.run(["curl", "-fsSLI", url], capture_output=True, text=True, timeout=30)
-        for line in r.stdout.splitlines():
-            if line.lower().startswith("content-length:"):
-                return int(line.split(":", 1)[1].strip())
-    except Exception:
-        pass
-    return None
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def ensure_weights(cfg: Config, log) -> None:
-    """Fetch the MLX weights (~2.5 GB) from the NemoStation Azure mirror into a
-    local dir before serving. Anonymous Azure Blob is fast (HF anonymous pulls
-    are rate-limited); the engine then serves from the local dir. Per-file resume
-    (curl -C -) + skip-if-complete (size match); idempotent. Never fatal — if the
-    mirror can't be reached, serve falls back to the HF repo id."""
+    """Fetch the MLX weights (~2.5 GB) from the NemoStation Azure CDN mirror into
+    a local dir before serving (anonymous Azure pulls beat rate-limited HF). Each
+    file is SHA256-verified against a pinned hash AFTER download — the engine
+    executes the downloaded modeling_marlin.py via --trust-remote-code, so a
+    tampered/hijacked mirror or a transient CDN corruption must fail closed. On
+    any mismatch the file is re-fetched once fresh; if it still fails, we abort
+    and serve falls back to the HF repo id. Resumable + idempotent."""
     if _WEIGHTS_DONE.exists():
         return
     WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -179,17 +195,28 @@ def ensure_weights(cfg: Config, log) -> None:
     for f in _WEIGHT_FILES:
         dest = WEIGHTS_DIR / f
         url = f"{MLX_WEIGHTS_URL}/{f}"
-        rsize = _remote_size(url)
-        if dest.exists() and rsize is not None and dest.stat().st_size == rsize:
-            continue  # already complete
+        want = _WEIGHT_SHA256[f]
+        if dest.exists() and _sha256(dest) == want:
+            continue  # present + verified
         if not announced:
             log("fetching Marlin-2B weights from the NemoStation mirror (one-time, ~2.5 GB — resumable)…")
             announced = True
-        try:
-            subprocess.run(["curl", "-fSL", "--retry", "3", "-C", "-", "-o", str(dest), url],
-                           check=True, stdin=subprocess.DEVNULL)
-        except subprocess.CalledProcessError:
-            log(f"  weight download incomplete ({f}) — re-run to resume (serve falls back to Hugging Face)")
+        ok = False
+        for attempt in (1, 2):  # attempt 2 = fresh re-fetch (transient CDN/partial)
+            if attempt == 2:
+                dest.unlink(missing_ok=True)
+            resume = ["-C", "-"] if attempt == 1 else []
+            try:
+                subprocess.run(["curl", "-fSL", "--retry", "3", *resume, "-o", str(dest), url],
+                               check=True, stdin=subprocess.DEVNULL)
+            except subprocess.CalledProcessError:
+                continue
+            if dest.exists() and _sha256(dest) == want:
+                ok = True
+                break
+        if not ok:
+            dest.unlink(missing_ok=True)
+            log(f"  ✗ {f}: download/checksum failed — serve falls back to Hugging Face")
             return
     _WEIGHTS_DONE.write_text("ok\n")
 
