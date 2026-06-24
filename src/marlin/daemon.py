@@ -37,6 +37,44 @@ def _alive(pid: int) -> bool:
         return False
 
 
+def _pids_on_port(port: int) -> list[int]:
+    """PIDs of OUR engine processes holding `port` — filtered to sglang/marlin so
+    a stale/orphaned engine gets reaped without touching an unrelated server that
+    happens to sit on the same port."""
+    try:
+        out = subprocess.run(["lsof", "-ti", f"tcp:{port}"],
+                             capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return []
+    ours: list[int] = []
+    for tok in out.split():
+        try:
+            pid = int(tok)
+            cmd = subprocess.run(["ps", "-p", str(pid), "-o", "command="],
+                                 capture_output=True, text=True, timeout=5).stdout
+            if any(k in cmd for k in ("sglang", "launch_server", "marlin")):
+                ours.append(pid)
+        except Exception:
+            pass
+    return ours
+
+
+def _kill(pid: int) -> None:
+    """SIGTERM the process group, then SIGKILL whatever is still alive."""
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(os.getpgid(pid), sig)
+        except OSError:
+            try:
+                os.kill(pid, sig)
+            except OSError:
+                return
+        if sig is signal.SIGTERM:
+            time.sleep(0.5)
+        if not _alive(pid):
+            return
+
+
 def status(cfg: Config) -> dict:
     d = _read()
     pid = d.get("pid")
@@ -62,6 +100,11 @@ def start(cfg: Config, log, port: int = engines.LOCAL_PORT, wait_s: float = 600.
     if not engines.engine_ready(engine):
         raise RuntimeError(f"{engine} engine not installed — run `marlin engine install`")
 
+    # Reap a stale engine squatting the port (a crashed run that never answered),
+    # so we don't fail to bind with "address already in use".
+    for p in _pids_on_port(port):
+        _kill(p)
+
     argv, env = engines.serve_command(cfg, engine, port)
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     logf = open(LOG_FILE, "ab")
@@ -81,22 +124,24 @@ def start(cfg: Config, log, port: int = engines.LOCAL_PORT, wait_s: float = 600.
 
 
 def stop(log) -> dict:
-    d = _read()
-    pid = d.get("pid")
-    if not pid or not _alive(pid):
-        DAEMON_FILE.unlink(missing_ok=True)
-        log("no running engine.")
-        return {"stopped": False}
-    try:
-        os.killpg(os.getpgid(pid), signal.SIGTERM)
-    except OSError:
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except OSError:
-            pass
+    """Stop the local engine. Kills the tracked PID AND reaps any orphaned engine
+    still holding the port — so a stale daemon.json can't leave a 16 GB process
+    running (the old bug: 'no running engine' while sglang squatted port 8000)."""
+    killed: list[int] = []
+    pid = _read().get("pid")
+    if pid and _alive(pid):
+        _kill(pid)
+        killed.append(pid)
+    for p in _pids_on_port(engines.LOCAL_PORT):
+        if p not in killed:
+            _kill(p)
+            killed.append(p)
     DAEMON_FILE.unlink(missing_ok=True)
-    log(f"stopped engine (pid {pid}).")
-    return {"stopped": True, "pid": pid}
+    if killed:
+        log(f"stopped engine ({len(killed)} process{'es' if len(killed) > 1 else ''}, pid {killed[0]}).")
+    else:
+        log("no running engine.")
+    return {"stopped": bool(killed), "pids": killed}
 
 
 def ensure_running(cfg: Config, log) -> None:

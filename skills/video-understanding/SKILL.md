@@ -57,6 +57,7 @@ Two verbs, each on a **single clip**, each `--json`:
 3. One video per call. For many videos, loop over them.
 4. Long video? window it (limit 2) — don't send a 20-minute file and trust the timestamps.
 5. `find` is single-answer (limit 3) — window + loop for "every time X happens."
+6. The engine stays warm between calls (fast). To free its RAM (~16 GB) when done: `marlin stop` — it auto-restarts on the next call.
 
 ## First run
 

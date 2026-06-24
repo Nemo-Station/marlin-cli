@@ -34,6 +34,9 @@ the weights. After it finishes, `caption` and `find` just work. The 8-bit
 weights are **public** — nothing gated, no API key. Add `--json` to any command
 for parseable output. (`ffmpeg` is optional — only for windowing videos >2 min.)
 
+The engine stays warm between calls so responses are fast. To shut it down and
+free the RAM (~16 GB): **`marlin stop`**. It auto-starts again on the next call.
+
 ## What it produces
 
 <table>
