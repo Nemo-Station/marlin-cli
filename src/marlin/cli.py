@@ -123,12 +123,10 @@ def _do_setup(
     """
     from . import engines
     from .backend import probe
-    from .chunker import check_ffmpeg
     from .output import is_json, spinner
 
-    if not check_ffmpeg():
-        err_console.print("[err]ffmpeg/ffprobe not found[/err] — install first: brew install ffmpeg")
-        raise typer.Exit(2)
+    # No ffmpeg gate: caption/find send the clip to the engine as-is. ffmpeg is
+    # only needed to window videos >2 min (optional) — never block setup on it.
 
     cfg = cfg_mod.load()
     detected = engines.detect_platform()

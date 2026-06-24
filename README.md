@@ -22,15 +22,17 @@ Hugging Face account.
 > coming as a separate optimized build.
 
 ```bash
-uv tool install nemostation      # or: pipx install nemostation
-marlin setup                     # one-time: sign in, build the local engine
+uv tool install nemostation      # 1. install   (or: pipx install nemostation)
+marlin setup                     # 2. set up    (sign in, build engine, download weights)
 marlin caption clip.mp4          # describe what's in a video
 marlin find clip.mp4 "a deer crossing"   # locate when it happens → start → end
 ```
 
-First run opens your browser for a quick sign-in (two questions, then Google),
-detects your Mac, and builds the local MLX engine. The 8-bit weights are
-**public** — nothing gated. Add `--json` to any command for parseable output.
+**Two commands and you're done** — `setup` does everything: a one-time browser
+sign-in (two questions, then Google), builds the local MLX engine, and downloads
+the weights. After it finishes, `caption` and `find` just work. The 8-bit
+weights are **public** — nothing gated, no API key. Add `--json` to any command
+for parseable output. (`ffmpeg` is optional — only for windowing videos >2 min.)
 
 ## What it produces
 

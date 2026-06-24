@@ -1,10 +1,10 @@
 ---
 name: video-understanding
-description: Use Marlin-2B as eyes on a video — describe what's in a clip (caption) or locate when something happens (find). Use whenever the user asks what's in a video, to describe or summarize a clip, to find when/where an event occurs, or to get a timestamp for a moment. Runs locally on Apple Silicon (MLX) or NVIDIA (vLLM), free, no API key. Bounded clips only (~2 min) — window longer videos.
+description: Use Marlin-2B as eyes on a video — describe what's in a clip (caption) or locate when something happens (find). Use whenever the user asks what's in a video, to describe or summarize a clip, to find when/where an event occurs, or to get a timestamp for a moment. Runs locally on Apple Silicon (MLX), free, no API key, no Hugging Face account. Bounded clips only (~2 min) — window longer videos.
 license: MIT
 metadata:
   requires:
-    bins: ["marlin", "ffmpeg"]
+    bins: ["marlin"]   # ffmpeg optional — only to window videos >2 min
 ---
 
 # video-understanding — Marlin-2B as eyes on a video
@@ -60,11 +60,12 @@ Two verbs, each on a **single clip**, each `--json`:
 
 ## First run
 
+Two commands, nothing else (Apple Silicon Mac):
 ```bash
-uv tool install nemostation   # install (Apple Silicon Mac)
-marlin setup                  # first-run: browser sign-in form, hardware detection, engine build (~5 min, one time)
+uv tool install nemostation   # 1. install
+marlin setup                  # 2. set up: browser sign-in, build engine, download weights (~5 min, one time)
 ```
-First run opens the browser for a one-time sign-in (two quick questions, then Google). Weights are public — no Hugging Face account needed. Any `marlin` command also auto-setups on first use. **Apple-Silicon only for now**; NVIDIA/other machines get a "coming soon" message.
+After `setup` finishes, `caption`/`find` work immediately — no other step. Weights are public (no Hugging Face account); `ffmpeg` is optional (only to window >2 min videos). **Apple-Silicon only for now**; NVIDIA/other machines get a "coming soon" message.
 
 ## Errors → fixes
 
@@ -72,7 +73,7 @@ First run opens the browser for a one-time sign-in (two quick questions, then Go
 |---|---|
 | `not configured` | run `marlin` once (it onboards), or `marlin setup`. |
 | `not a file` | pass a path to one video file. |
-| `ffmpeg/ffprobe not found` | `brew install ffmpeg` (macOS) / `apt install ffmpeg`. |
+| `ffmpeg/ffprobe not found` | only when windowing >2 min videos — `brew install ffmpeg`. Not needed for a single clip. |
 | `Connection refused` / `APIConnectionError` | local engine not up → `marlin serve` (it also auto-starts on the first call). |
 | `sign-in required` | run `marlin login` (opens the browser) to sign in with Google. |
 
