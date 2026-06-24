@@ -112,4 +112,6 @@ def ensure_running(cfg: Config, log) -> None:
         from .output import build_spinner
         with build_spinner("building the local engine (one time)") as slog:
             engines.install_mlx(slog)
+    if eng == "mlx":
+        engines.ensure_weights(cfg, log)  # pre-download weights (progress bar) before the serve timeout
     start(cfg, log)

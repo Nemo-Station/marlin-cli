@@ -138,6 +138,25 @@ def serve_command(cfg: Config, engine: str, port: int = LOCAL_PORT) -> tuple[lis
     raise ValueError(f"engine {engine!r} has no local server (hosted runs remotely)")
 
 
+def ensure_weights(cfg: Config, log) -> None:
+    """Pre-fetch the MLX weights (~2.5 GB) once, with a visible progress bar,
+    before serving — so the first run doesn't race the readiness timeout while
+    the engine silently downloads. Anonymous HF pulls are rate-limited, so on a
+    fresh machine the in-serve download can blow past 600s. Idempotent +
+    resumable (snapshot_download); fast no-op once cached. Runs in the engine's
+    venv (which has huggingface_hub); never fatal — the engine retries on start."""
+    py = mlx_python()
+    if not py.is_file():
+        return  # engine not built yet; caller builds first
+    log(f"fetching {cfg.mlx_weights.split('/')[-1]} weights (one-time, ~2.5 GB — resumable)…")
+    code = "import sys; from huggingface_hub import snapshot_download; snapshot_download(sys.argv[1])"
+    try:
+        subprocess.run([str(py), "-c", code, cfg.mlx_weights],
+                       check=True, stdin=subprocess.DEVNULL)
+    except subprocess.CalledProcessError:
+        log("weight pre-fetch incomplete — the engine will finish it on start")
+
+
 # ── MLX engine install ─────────────────────────────────────────────────────────
 
 def install_mlx(log) -> None:
