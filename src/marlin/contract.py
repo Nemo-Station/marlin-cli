@@ -11,8 +11,9 @@ stray output formats.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from typing import Literal
+
+from .models import Event
 
 # Release-canonical grounding prompt → 'From <start> to <end>.' in seconds.
 GROUND_PROMPT = (
@@ -39,6 +40,18 @@ _THINK_CLOSE = re.compile(r"</think>\s*", re.IGNORECASE)
 
 
 def strip_thinking(text: str) -> str:
+    """Remove Marlin thinking tags from generated text.
+
+    Parameters
+    ----------
+    text
+        Raw model output.
+
+    Returns
+    -------
+    str
+        Cleaned model output.
+    """
     out = _THINK_BLOCK.sub("", text)
     out = _THINK_PREFIX.sub("", out)
     out = _THINK_CLOSE.sub("", out)
@@ -46,13 +59,6 @@ def strip_thinking(text: str) -> str:
 
 
 # --- Mode 1: dense caption parser (mirrors modeling_marlin.parse_caption) ---
-
-
-@dataclass
-class Event:
-    start: float
-    end: float
-    text: str
 
 
 # Tolerates `<1.2 - 3.4>` / `1.2 - 3.4` / `1.2-3.4` with optional units, units
@@ -81,27 +87,31 @@ def _parse_event_lines(block: str) -> list[Event]:
 
 
 def parse_caption(text: str) -> tuple[str, list[Event]]:
-    """Parse a Mode-1 caption into ``(scene, events)``.
+    """Parse a dense caption response.
 
-    Trained format::
+    Parameters
+    ----------
+    text
+        Raw model output. The trained format is ``Scene: <paragraph>``
+        followed by ``Events:`` rows such as ``<start - end> description``.
 
-        Scene: <one-paragraph spatial description>
-
-        Events:
-        <start - end> <description>
-        <start - end> <description>
-
-    Tolerant: missing ``Scene:``/``Events:`` headers fall back to "everything
-    before the first event line is the scene."
+    Returns
+    -------
+    tuple[str, list[Event]]
+        Scene text and parsed event rows. Missing headers fall back to treating
+        text before the first event line as the scene.
     """
     cleaned = strip_thinking(text)
 
     scene_match = re.search(
         r"(?:^|\n)\s*Scene\s*:\s*(.*?)(?=\n\s*Events\s*:|\Z)",
-        cleaned, re.IGNORECASE | re.DOTALL,
+        cleaned,
+        re.IGNORECASE | re.DOTALL,
     )
     events_match = re.search(
-        r"(?:^|\n)\s*Events\s*:\s*(.*)\Z", cleaned, re.IGNORECASE | re.DOTALL,
+        r"(?:^|\n)\s*Events\s*:\s*(.*)\Z",
+        cleaned,
+        re.IGNORECASE | re.DOTALL,
     )
 
     if scene_match:
@@ -120,9 +130,7 @@ def parse_caption(text: str) -> tuple[str, list[Event]]:
 
 # --- Mode 2: temporal grounding parser ---
 
-ParsedTier = Literal[
-    "from_pair", "mmss_pair", "dash_pair", "to_pair", "any_pair", "no_match"
-]
+ParsedTier = Literal["from_pair", "mmss_pair", "dash_pair", "to_pair", "any_pair", "no_match"]
 
 # Release-canonical span: 'From 1.2 to 3.4.', 'From 1.2s to 3.4 sec'.
 _SPAN_FROM = re.compile(
@@ -146,7 +154,18 @@ def _mmss_to_seconds(token: str) -> float:
 
 
 def parse_span(text: str) -> tuple[tuple[float, float], ParsedTier]:
-    """Return ((start_s, end_s), tier). Release 'From X to Y' first, then cascade."""
+    """Parse a temporal grounding span.
+
+    Parameters
+    ----------
+    text
+        Raw model output.
+
+    Returns
+    -------
+    tuple[tuple[float, float], ParsedTier]
+        Parsed ``(start, end)`` span and the parser tier that matched it.
+    """
     cleaned = strip_thinking(text)
     if not cleaned:
         return (0.0, 0.0), "no_match"

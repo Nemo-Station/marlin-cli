@@ -9,17 +9,16 @@ from __future__ import annotations
 
 import hashlib
 import tempfile
-from dataclasses import dataclass, field
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
 
 import lancedb
 import pyarrow as pa
 
 from .backend import Marlin
-from .chunker import Chunk, chunk_spans, extract_chunk, is_still_chunk, probe_duration
-from .config import Config
+from .chunker import chunk_spans, extract_chunk, is_still_chunk, probe_duration
+from .models import Chunk, Config, IndexStats
 from .output import status
 
 EVENTS_TABLE = "events"
@@ -30,9 +29,17 @@ _WHISPER = None
 
 
 def get_embedder(model_name: str):
+    """Return a cached sentence embedding model.
+
+    Parameters
+    ----------
+    model_name
+        Sentence Transformers model name.
+    """
     global _EMBEDDER
     if _EMBEDDER is None:
         from sentence_transformers import SentenceTransformer
+
         status(f"loading embedder {model_name} …")
         _EMBEDDER = SentenceTransformer(model_name)
     return _EMBEDDER
@@ -43,21 +50,30 @@ def _row_id(video: str, start: float, kind: str, text: str) -> str:
 
 
 def _events_schema(dim: int) -> pa.Schema:
-    return pa.schema([
-        pa.field("id", pa.string()),
-        pa.field("video", pa.string()),
-        pa.field("start", pa.float32()),
-        pa.field("end", pa.float32()),
-        pa.field("chunk_start", pa.float32()),
-        pa.field("chunk_end", pa.float32()),
-        pa.field("kind", pa.string()),
-        pa.field("text", pa.string()),
-        pa.field("indexed_at", pa.string()),
-        pa.field("vector", pa.list_(pa.float32(), dim)),
-    ])
+    return pa.schema(
+        [
+            pa.field("id", pa.string()),
+            pa.field("video", pa.string()),
+            pa.field("start", pa.float32()),
+            pa.field("end", pa.float32()),
+            pa.field("chunk_start", pa.float32()),
+            pa.field("chunk_end", pa.float32()),
+            pa.field("kind", pa.string()),
+            pa.field("text", pa.string()),
+            pa.field("indexed_at", pa.string()),
+            pa.field("vector", pa.list_(pa.float32(), dim)),
+        ]
+    )
 
 
 def open_db(cfg: Config):
+    """Open the configured LanceDB database.
+
+    Parameters
+    ----------
+    cfg
+        Runtime configuration.
+    """
     return lancedb.connect(cfg.db_path)
 
 
@@ -73,7 +89,9 @@ def _open_tables(db, dim: int):
         if DONE_TABLE in names
         else db.create_table(
             DONE_TABLE,
-            schema=pa.schema([pa.field("video", pa.string()), pa.field("chunk_start", pa.float32())]),
+            schema=pa.schema(
+                [pa.field("video", pa.string()), pa.field("chunk_start", pa.float32())]
+            ),
         )
     )
     return events, done
@@ -88,7 +106,18 @@ def _done_starts(done_tbl, video: str) -> set[float]:
 
 
 def _transcribe(chunk: Chunk) -> list[tuple[float, float, str]]:
-    """Optional STT on the raw chunk. Requires `pip install 'nemostation[stt]'`."""
+    """Transcribe speech from a raw chunk.
+
+    Parameters
+    ----------
+    chunk
+        Extracted chunk with audio.
+
+    Returns
+    -------
+    list[tuple[float, float, str]]
+        Speech segments relative to the chunk.
+    """
     try:
         from faster_whisper import WhisperModel
     except ImportError:
@@ -102,17 +131,6 @@ def _transcribe(chunk: Chunk) -> list[tuple[float, float, str]]:
     return [(s.start, s.end, s.text.strip()) for s in segments if s.text.strip()]
 
 
-@dataclass
-class IndexStats:
-    videos: int = 0
-    chunks: int = 0
-    skipped_still: int = 0
-    skipped_done: int = 0
-    events: int = 0
-    speech_segments: int = 0
-    errors: list[str] = field(default_factory=list)
-
-
 def index_videos(
     cfg: Config,
     videos: list[Path],
@@ -120,6 +138,24 @@ def index_videos(
     stt: bool = False,
     on_progress: Callable[[IndexStats, str], None] | None = None,
 ) -> IndexStats:
+    """Index videos into local caption and embedding tables.
+
+    Parameters
+    ----------
+    cfg
+        Runtime configuration.
+    videos
+        Video files to index.
+    stt
+        Whether to include speech transcription rows.
+    on_progress
+        Optional progress callback.
+
+    Returns
+    -------
+    IndexStats
+        Indexing counters and non-fatal errors.
+    """
     marlin = Marlin(cfg)
     embedder = get_embedder(cfg.embed_model)
     dim = embedder.get_embedding_dimension()
@@ -162,36 +198,50 @@ def index_videos(
                         chunk.proxy.unlink(missing_ok=True)
                         continue
                     if scene:
-                        rows.append({
-                            "video": vkey, "start": start, "end": end,
-                            "chunk_start": start, "chunk_end": end,
-                            "kind": "scene", "text": scene,
-                        })
+                        rows.append(
+                            {
+                                "video": vkey,
+                                "start": start,
+                                "end": end,
+                                "chunk_start": start,
+                                "chunk_end": end,
+                                "kind": "scene",
+                                "text": scene,
+                            }
+                        )
                     for ev in events:
                         abs_start = min(start + ev.start, end)
                         abs_end = min(start + ev.end, end)
-                        rows.append({
-                            "video": vkey, "start": abs_start, "end": abs_end,
-                            "chunk_start": start, "chunk_end": end,
-                            "kind": "event", "text": ev.text,
-                        })
+                        rows.append(
+                            {
+                                "video": vkey,
+                                "start": abs_start,
+                                "end": abs_end,
+                                "chunk_start": start,
+                                "chunk_end": end,
+                                "kind": "event",
+                                "text": ev.text,
+                            }
+                        )
                         stats.events += 1
                     if stt:
                         for s_start, s_end, s_text in _transcribe(chunk):
-                            rows.append({
-                                "video": vkey,
-                                "start": min(start + s_start, end),
-                                "end": min(start + s_end, end),
-                                "chunk_start": start, "chunk_end": end,
-                                "kind": "speech", "text": s_text,
-                            })
+                            rows.append(
+                                {
+                                    "video": vkey,
+                                    "start": min(start + s_start, end),
+                                    "end": min(start + s_end, end),
+                                    "chunk_start": start,
+                                    "chunk_end": end,
+                                    "kind": "speech",
+                                    "text": s_text,
+                                }
+                            )
                             stats.speech_segments += 1
 
                 if rows:
-                    vectors = embedder.encode(
-                        [r["text"] for r in rows], normalize_embeddings=True
-                    )
-                    for r, v in zip(rows, vectors):
+                    vectors = embedder.encode([r["text"] for r in rows], normalize_embeddings=True)
+                    for r, v in zip(rows, vectors, strict=True):
                         r["id"] = _row_id(r["video"], r["start"], r["kind"], r["text"])
                         r["indexed_at"] = now
                         r["vector"] = v.tolist()

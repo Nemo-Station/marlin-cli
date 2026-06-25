@@ -23,6 +23,15 @@ def _job_file(job_id: str) -> Path:
 
 
 def write_job(job_id: str, data: dict) -> None:
+    """Atomically write background job state.
+
+    Parameters
+    ----------
+    job_id
+        Job identifier.
+    data
+        Serializable job payload.
+    """
     JOBS_DIR.mkdir(parents=True, exist_ok=True)
     data["updated_at"] = datetime.now(timezone.utc).isoformat()
     tmp = _job_file(job_id).with_suffix(".tmp")
@@ -31,6 +40,13 @@ def write_job(job_id: str, data: dict) -> None:
 
 
 def read_job(job_id: str) -> dict | None:
+    """Read background job state.
+
+    Parameters
+    ----------
+    job_id
+        Job identifier.
+    """
     f = _job_file(job_id)
     if not f.is_file():
         return None
@@ -41,6 +57,7 @@ def read_job(job_id: str) -> dict | None:
 
 
 def list_jobs() -> list[dict]:
+    """Return all readable background job payloads."""
     if not JOBS_DIR.is_dir():
         return []
     out = []
@@ -53,6 +70,20 @@ def list_jobs() -> list[dict]:
 
 
 def spawn_index(inputs: list[str], *, stt: bool) -> str:
+    """Spawn a detached background index process.
+
+    Parameters
+    ----------
+    inputs
+        User-provided index inputs.
+    stt
+        Whether to include speech transcription.
+
+    Returns
+    -------
+    str
+        New job identifier.
+    """
     job_id = uuid.uuid4().hex[:8]
     JOBS_DIR.mkdir(parents=True, exist_ok=True)
     log = (JOBS_DIR / f"{job_id}.log").open("w")
@@ -60,8 +91,11 @@ def spawn_index(inputs: list[str], *, stt: bool) -> str:
     if stt:
         cmd.append("--stt")
     subprocess.Popen(
-        cmd, stdout=log, stderr=subprocess.STDOUT,
-        start_new_session=True, env=os.environ.copy(),
+        cmd,
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        env=os.environ.copy(),
     )
     write_job(job_id, {"job_id": job_id, "state": "started", "inputs": inputs})
     return job_id

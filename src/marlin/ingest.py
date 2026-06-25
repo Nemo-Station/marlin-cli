@@ -18,20 +18,47 @@ _URL_RE = re.compile(r"^https?://", re.IGNORECASE)
 
 
 def is_url(s: str) -> bool:
+    """Return whether a string is an HTTP(S) URL."""
     return bool(_URL_RE.match(s))
 
 
 def download_url(url: str) -> Path:
+    """Download a URL once into the Marlin downloads directory.
+
+    Parameters
+    ----------
+    url
+        HTTP(S) video URL accepted by ``yt-dlp``.
+
+    Returns
+    -------
+    Path
+        Local downloaded video path.
+    """
     DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
     out_tpl = str(DOWNLOADS_DIR / "%(id)s.%(ext)s")
     status(f"downloading {url} …")
     r = subprocess.run(
-        ["yt-dlp", "-f", "mp4/bestvideo*+bestaudio/best", "--merge-output-format", "mp4",
-         "-o", out_tpl, "--no-playlist", "--print", "after_move:filepath", url],
-        capture_output=True, text=True,
+        [
+            "yt-dlp",
+            "-f",
+            "mp4/bestvideo*+bestaudio/best",
+            "--merge-output-format",
+            "mp4",
+            "-o",
+            out_tpl,
+            "--no-playlist",
+            "--print",
+            "after_move:filepath",
+            url,
+        ],
+        capture_output=True,
+        text=True,
     )
     if r.returncode != 0:
-        raise RuntimeError(f"yt-dlp failed: {r.stderr.strip().splitlines()[-1] if r.stderr else 'unknown error'}")
+        raise RuntimeError(
+            f"yt-dlp failed: {r.stderr.strip().splitlines()[-1] if r.stderr else 'unknown error'}"
+        )
     path = Path(r.stdout.strip().splitlines()[-1])
     if not path.exists():
         raise RuntimeError("yt-dlp reported success but no file found")
@@ -39,7 +66,13 @@ def download_url(url: str) -> Path:
 
 
 def resolve_inputs(inputs: list[str]) -> list[Path]:
-    """Expand URLs (download), directories (recurse), and files into video paths."""
+    """Expand URLs, directories, and files into unique video paths.
+
+    Parameters
+    ----------
+    inputs
+        User-provided video files, folders, or URLs.
+    """
     videos: list[Path] = []
     for item in inputs:
         if is_url(item):
@@ -47,9 +80,9 @@ def resolve_inputs(inputs: list[str]) -> list[Path]:
             continue
         p = Path(item).expanduser()
         if p.is_dir():
-            videos.extend(sorted(
-                f for f in p.rglob("*") if f.suffix.lower() in VIDEO_EXTS and f.is_file()
-            ))
+            videos.extend(
+                sorted(f for f in p.rglob("*") if f.suffix.lower() in VIDEO_EXTS and f.is_file())
+            )
         elif p.is_file() and p.suffix.lower() in VIDEO_EXTS:
             videos.append(p)
     # de-dupe, keep order

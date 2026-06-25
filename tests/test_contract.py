@@ -1,13 +1,21 @@
-"""Contract parser tests — runnable with plain python3 (no deps):
-    PYTHONPATH=src python3 tests/test_contract.py
+"""Contract parser tests — runnable without a test runner:
+PYTHONPATH=src python3 tests/test_contract.py
 """
 
+import contextlib
+import io
+import json
+import os
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from marlin import __version__  # noqa: E402
 from marlin.contract import parse_caption, parse_span, strip_thinking  # noqa: E402
+from marlin.models import Config, Event  # noqa: E402
 
 # Verbatim Marlin-2B output captured from the live hosted endpoint
 # (caption_video.mp4, 2026-06-12) — the format the parser must handle.
@@ -76,6 +84,119 @@ def test_strip_thinking():
     assert strip_thinking("<think>\nFrom 3.5 to 8.2.") == "From 3.5 to 8.2."
     assert strip_thinking("From 3.5 to 8.2.</think>") == "From 3.5 to 8.2."
     assert strip_thinking("From 3.5 to 8.2.") == "From 3.5 to 8.2."
+
+
+def _capture_cli_json(fn, *args, **kwargs):
+    from marlin.output import set_json
+
+    set_json(True)
+    stdout = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(stdout):
+            fn(*args, **kwargs)
+    finally:
+        set_json(False)
+    return json.loads(stdout.getvalue())
+
+
+class _FakeMarlin:
+    def __init__(self, *args, **kwargs):
+        self.last_note = None
+
+    def caption_events(self, video):
+        return (
+            "a quiet platform at night",
+            [Event(start=0.0, end=2.5, text="a train arrives")],
+            "raw",
+        )
+
+    def ground(self, video, query):
+        return (4.0, 6.25), "from_pair"
+
+
+def test_caption_command_json_shape():
+    from marlin import backend, cli
+
+    original_ready_clip = cli._ready_clip
+    original_marlin = backend.Marlin
+    try:
+        cli._ready_clip = lambda video: (Config(), Path(video))
+        backend.Marlin = _FakeMarlin
+        payload = _capture_cli_json(
+            cli.caption,
+            "clip.mp4",
+            detail=False,
+            max_pixels=200704,
+            fps=2.0,
+            full_res=False,
+        )
+    finally:
+        cli._ready_clip = original_ready_clip
+        backend.Marlin = original_marlin
+
+    assert payload == {
+        "video": "clip.mp4",
+        "scene": "a quiet platform at night",
+        "events": [{"start": 0.0, "end": 2.5, "text": "a train arrives"}],
+    }
+
+
+def test_find_command_json_shape():
+    from marlin import backend, cli
+
+    original_ready_clip = cli._ready_clip
+    original_marlin = backend.Marlin
+    try:
+        cli._ready_clip = lambda video: (Config(), Path(video))
+        backend.Marlin = _FakeMarlin
+        payload = _capture_cli_json(
+            cli.find,
+            "clip.mp4",
+            "train arrives",
+            max_pixels=200704,
+            fps=2.0,
+            full_res=False,
+        )
+    finally:
+        cli._ready_clip = original_ready_clip
+        backend.Marlin = original_marlin
+
+    assert payload == {
+        "video": "clip.mp4",
+        "query": "train arrives",
+        "start": 4.0,
+        "end": 6.25,
+        "found": True,
+        "tier": "from_pair",
+    }
+
+
+def test_json_stdout_stays_parseable_when_logging_to_stderr():
+    repo = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    with tempfile.TemporaryDirectory() as home:
+        env["PYTHONPATH"] = str(repo / "src")
+        env["MARLIN_HOME"] = home
+        env["MARLIN_LOG_STDERR"] = "1"
+        env["MARLIN_LOG_LEVEL"] = "DEBUG"
+        env.pop("MARLIN_LOG_FILE_ENABLED", None)
+        env.pop("MARLIN_LOG_FILE", None)
+        env.pop("MARLIN_LOG_DIR", None)
+
+        proc = subprocess.run(
+            [sys.executable, "-m", "marlin.cli", "--json", "version"],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=20,
+            check=False,
+        )
+
+        assert proc.returncode == 0, proc.stderr
+        assert json.loads(proc.stdout) == {"version": __version__}
+        assert "cli entrypoint initialized" in proc.stderr
+        assert "cli entrypoint initialized" not in proc.stdout
+        assert not (Path(home) / "logs" / "marlin.log").exists()
 
 
 if __name__ == "__main__":
