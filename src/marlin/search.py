@@ -1,5 +1,4 @@
-"""Two-stage search: coarse retrieval over caption embeddings, then Marlin
-temporal grounding inside the winning chunks.
+"""Two-stage search over caption embeddings and grounded video chunks.
 
 Stage 1 (cheap, index-only): vector + BM25 over event/chunk/speech rows,
 merged with reciprocal-rank fusion. Stage 2 (one model call per candidate):
@@ -10,35 +9,15 @@ the precise span sentrysearch-style native-embedding search can't produce.
 from __future__ import annotations
 
 import tempfile
-from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from .backend import Marlin
 from .chunker import extract_chunk
-from .config import Config
 from .indexer import EVENTS_TABLE, get_embedder, open_db
+from .models import Config, Hit
 from .output import status
 
 RRF_K = 60
-
-
-@dataclass
-class Hit:
-    video: str
-    start: float
-    end: float
-    text: str
-    kind: str
-    score: float
-    grounded: bool = False
-    tier: str = ""
-
-    def to_dict(self) -> dict:
-        d = asdict(self)
-        d["start"] = round(self.start, 2)
-        d["end"] = round(self.end, 2)
-        d["score"] = round(self.score, 4)
-        return d
 
 
 def _rrf_merge(result_lists: list[list[dict]]) -> list[dict]:
@@ -66,6 +45,26 @@ def search(
     scope: str | None = None,
     ground: bool = True,
 ) -> list[Hit]:
+    """Search the local index and optionally refine spans with Marlin.
+
+    Parameters
+    ----------
+    cfg
+        Runtime configuration.
+    query
+        Natural-language search query.
+    k
+        Number of distinct chunk candidates to return.
+    scope
+        Optional video path scope filter.
+    ground
+        Whether to run precise stage-two temporal grounding.
+
+    Returns
+    -------
+    list[Hit]
+        Ranked search hits.
+    """
     db = open_db(cfg)
     if EVENTS_TABLE not in set(db.table_names()):
         raise RuntimeError("index is empty — run `marlin index <path>` first")

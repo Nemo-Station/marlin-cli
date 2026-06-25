@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass, field
 from pathlib import Path
+
+from .models import Config
 
 CONFIG_DIR = Path(os.environ.get("MARLIN_HOME", Path.home() / ".marlin"))
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -23,26 +24,8 @@ DEFAULT_LOCAL_URL = "http://localhost:8000/v1"
 NO_KEY = "no-key-required"
 
 
-@dataclass
-class Config:
-    mode: str = "local"  # "local" | "hosted"
-    base_url: str = DEFAULT_LOCAL_URL
-    api_key: str = ""
-    model: str = DEFAULT_MODEL
-    engine: str = "auto"  # auto | mlx | vllm | hosted — how/where Marlin runs locally
-    mlx_weights: str = "NemoStation/Marlin-2B-MLX-8bit"  # public MLX repo (Apple Silicon)
-    embed_model: str = "BAAI/bge-small-en-v1.5"
-    chunk_seconds: float = 30.0
-    chunk_overlap: float = 5.0
-    db_path: str = str(DB_DIR)
-    extra: dict = field(default_factory=dict)
-
-    @property
-    def resolved_api_key(self) -> str:
-        return self.api_key or NO_KEY
-
-
 def load() -> Config:
+    """Load configuration from disk, then apply environment overrides."""
     cfg = Config()
     if CONFIG_FILE.is_file():
         try:
@@ -68,15 +51,18 @@ def load() -> Config:
 
 
 def save(cfg: Config) -> Path:
+    """Persist configuration to ``~/.marlin/config.json``."""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(asdict(cfg), indent=2) + "\n")
+    CONFIG_FILE.write_text(json.dumps(cfg.model_dump(), indent=2) + "\n")
     CONFIG_FILE.chmod(0o600)
     return CONFIG_FILE
 
 
 def configured() -> bool:
+    """Return whether Marlin has explicit local configuration."""
     return CONFIG_FILE.is_file() or bool(os.environ.get("MARLIN_BASE_URL"))
 
 
 def _looks_local(url: str) -> bool:
+    """Return whether a base URL points at a local server."""
     return any(h in url for h in ("localhost", "127.0.0.1", "0.0.0.0", "host.docker.internal"))

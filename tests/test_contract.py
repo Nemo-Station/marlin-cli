@@ -1,5 +1,5 @@
 """Contract parser tests — runnable with plain python3 (no deps):
-    PYTHONPATH=src python3 tests/test_contract.py
+PYTHONPATH=src python3 tests/test_contract.py
 """
 
 import sys

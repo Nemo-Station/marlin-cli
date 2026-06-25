@@ -24,45 +24,73 @@ import urllib.parse
 import urllib.request
 
 from .config import CONFIG_DIR
+from .logging import get_logger
 
-SUPABASE_URL = os.environ.get("MARLIN_SUPABASE_URL", "https://iqjjodhgoohixngrlqaf.supabase.co").rstrip("/")
+logger = get_logger("auth")
+
+SUPABASE_URL = os.environ.get(
+    "MARLIN_SUPABASE_URL", "https://iqjjodhgoohixngrlqaf.supabase.co"
+).rstrip("/")
 # SAFETY: this MUST stay the publishable (anon) key — public by design,
 # guarded by RLS, safe to ship. NEVER swap in a secret / service-role key.
-SUPABASE_KEY = os.environ.get("MARLIN_SUPABASE_KEY", "sb_publishable_BheDPS6J2QRE7bnyqzCyfA_KErwKoGp")
+SUPABASE_KEY = os.environ.get(
+    "MARLIN_SUPABASE_KEY", "sb_publishable_BheDPS6J2QRE7bnyqzCyfA_KErwKoGp"
+)
 AUTH_FILE = CONFIG_DIR / "auth.json"
 
 
 def current() -> dict | None:
+    """Return the persisted authentication session, if present."""
     try:
         return json.loads(AUTH_FILE.read_text())
-    except Exception:
+    except Exception as exc:
+        logger.debug("auth state file missing or unreadable: {}", exc)
         return None
 
 
 def email() -> str | None:
+    """Return the signed-in email address, if present."""
     return (current() or {}).get("email")
 
 
 def logout() -> bool:
+    """Delete the persisted authentication session.
+
+    Returns
+    -------
+    bool
+        ``True`` when a session file existed before logout.
+    """
     existed = AUTH_FILE.exists()
     AUTH_FILE.unlink(missing_ok=True)
     return existed
 
 
 def google_enabled() -> bool | None:
-    """True/False if the Supabase Google provider is on; None if unreachable.
-    Lets callers skip a doomed browser open before the provider is configured."""
+    """Return whether Google sign-in is enabled on Supabase.
+
+    Returns
+    -------
+    bool | None
+        ``True`` or ``False`` when settings are reachable. ``None`` means the
+        settings endpoint could not be reached.
+    """
     try:
-        req = urllib.request.Request(f"{SUPABASE_URL}/auth/v1/settings", headers={"apikey": SUPABASE_KEY})
+        req = urllib.request.Request(
+            f"{SUPABASE_URL}/auth/v1/settings", headers={"apikey": SUPABASE_KEY}
+        )
         with urllib.request.urlopen(req, timeout=8) as r:
             return bool((json.loads(r.read()).get("external") or {}).get("google"))
-    except Exception:
+    except Exception as exc:
+        logger.debug("could not read Supabase auth settings: {}", exc)
         return None
 
 
 def _pkce() -> tuple[str, str]:
     verifier = base64.urlsafe_b64encode(secrets.token_bytes(64)).rstrip(b"=").decode()
-    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    )
     return verifier, challenge
 
 
@@ -73,9 +101,9 @@ REDIRECT_PORT = int(os.environ.get("MARLIN_AUTH_PORT", "54123"))
 
 _DONE_PAGE = (
     b"<!doctype html><meta charset=utf-8><title>marlin</title>"
-    b"<body style=\"font-family:system-ui;text-align:center;padding-top:90px;"
-    b"color:#2B2220;background:#F4ECD8\">"
-    b"<div style=\"font-size:24px;color:#E76F57;font-weight:600\">marlin</div>"
+    b'<body style="font-family:system-ui;text-align:center;padding-top:90px;'
+    b'color:#2B2220;background:#F4ECD8">'
+    b'<div style="font-size:24px;color:#E76F57;font-weight:600">marlin</div>'
     b"<p>Signed in. Close this tab and return to your terminal.</p></body>"
 )
 
@@ -105,7 +133,8 @@ button:disabled{background:#e2d6c2;color:#ab9d92;cursor:not-allowed}
 <div class="sub">Two quick questions, then sign in with Google.</div>
 <form id="f">
 <label for="aff">Affiliation or company</label>
-<input id="aff" autocomplete="organization" placeholder="e.g. Stanford, Acme Inc, independent" required>
+<input id="aff" autocomplete="organization"
+ placeholder="e.g. Stanford, Acme Inc, independent" required>
 <label for="use">What do you want to use Marlin for?</label>
 <input id="use" placeholder="e.g. labelling sports clips, video search" required>
 <button id="go" type="submit" disabled>Continue with Google</button>
@@ -131,14 +160,25 @@ def _form_html(authorize: str) -> bytes:
 
 
 def _update_profile(access_token: str, data: dict) -> None:
-    """PUT the two onboarding answers into Supabase user_metadata (auth.users).
-    Access token is used in-memory only — never written to disk."""
+    """Write onboarding answers into Supabase user metadata.
+
+    Parameters
+    ----------
+    access_token
+        Short-lived access token used in-memory only.
+    data
+        Sanitized onboarding answers.
+    """
     body = json.dumps({"data": data}).encode()
     req = urllib.request.Request(
         f"{SUPABASE_URL}/auth/v1/user",
-        data=body, method="PUT",
-        headers={"Content-Type": "application/json", "apikey": SUPABASE_KEY,
-                 "Authorization": f"Bearer {access_token}"},
+        data=body,
+        method="PUT",
+        headers={
+            "Content-Type": "application/json",
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {access_token}",
+        },
     )
     urllib.request.urlopen(req, timeout=15).close()
 
@@ -147,9 +187,18 @@ _MAX_PROFILE_BYTES = 8192
 
 
 def _clean_profile(raw: bytes) -> dict:
-    """Whitelist the onboarding answers before they're written to user_metadata:
-    only affiliation + use_case, strings, length-capped. Anything else is dropped,
-    so a stray cross-origin POST can't stuff arbitrary keys into the user's record."""
+    """Return whitelisted onboarding answers.
+
+    Parameters
+    ----------
+    raw
+        JSON request body from the localhost onboarding form.
+
+    Returns
+    -------
+    dict
+        Sanitized ``affiliation`` and ``use_case`` values.
+    """
     try:
         data = json.loads(raw or b"{}")
     except Exception:
@@ -165,9 +214,27 @@ def _clean_profile(raw: bytes) -> dict:
 
 
 def login(*, log=lambda m: None, timeout: float = 300.0) -> dict:
-    """Run the browser sign-in (2-question form → Google); return
-    {email, user_id, refresh_token}. The answers land in Supabase user_metadata.
-    Raises RuntimeError with a clear message on any failure."""
+    """Run the browser sign-in flow.
+
+    Parameters
+    ----------
+    log
+        Progress callback used by the CLI.
+    timeout
+        Maximum seconds to wait for the OAuth callback.
+
+    Returns
+    -------
+    dict
+        Session metadata containing ``email``, ``user_id``, and
+        ``refresh_token``.
+
+    Raises
+    ------
+    RuntimeError
+        If Google sign-in is disabled, the callback port is busy, OAuth fails,
+        or the flow times out.
+    """
     if google_enabled() is False:
         raise RuntimeError("Google sign-in isn't enabled on the server yet")
 
@@ -230,8 +297,11 @@ def login(*, log=lambda m: None, timeout: float = 300.0) -> dict:
 
     try:
         server = http.server.HTTPServer(("127.0.0.1", port), Handler)
-    except OSError:
-        raise RuntimeError(f"local port {port} is busy — free it (or set MARLIN_AUTH_PORT) and retry")
+    except OSError as exc:
+        logger.exception("could not bind auth callback server on port {}", port)
+        raise RuntimeError(
+            f"local port {port} is busy — free it (or set MARLIN_AUTH_PORT) and retry"
+        ) from exc
     server.timeout = 1
     import webbrowser
 
@@ -245,21 +315,27 @@ def login(*, log=lambda m: None, timeout: float = 300.0) -> dict:
     server.server_close()
 
     if caught.get("error"):
+        logger.warning("OAuth callback returned error: {}", caught["error"])
         raise RuntimeError(f"sign-in failed: {caught['error']}")
     if not caught.get("code"):
+        logger.warning("OAuth flow timed out")
         raise RuntimeError("sign-in timed out")
 
     body = json.dumps({"auth_code": caught["code"], "code_verifier": verifier}).encode()
     req = urllib.request.Request(
         f"{SUPABASE_URL}/auth/v1/token?grant_type=pkce",
-        data=body, method="POST",
+        data=body,
+        method="POST",
         headers={"Content-Type": "application/json", "apikey": SUPABASE_KEY},
     )
     try:
         with urllib.request.urlopen(req, timeout=20) as r:
             session = json.loads(r.read())
     except urllib.error.HTTPError as e:
-        raise RuntimeError(f"token exchange failed ({e.code}): {e.read().decode(errors='ignore')[:200]}")
+        logger.exception("OAuth token exchange failed")
+        raise RuntimeError(
+            f"token exchange failed ({e.code}): {e.read().decode(errors='ignore')[:200]}"
+        ) from e
 
     # Best-effort: write the two answers to user_metadata. Never fail sign-in over it.
     profile = caught.get("profile") or {}
@@ -268,11 +344,15 @@ def login(*, log=lambda m: None, timeout: float = 300.0) -> dict:
         try:
             _update_profile(access_token, profile)
         except Exception:
+            logger.exception("failed to update onboarding profile")
             pass
 
     user = session.get("user") or {}
-    out = {"email": user.get("email"), "user_id": user.get("id"),
-           "refresh_token": session.get("refresh_token")}
+    out = {
+        "email": user.get("email"),
+        "user_id": user.get("id"),
+        "refresh_token": session.get("refresh_token"),
+    }
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     # Atomic 0600 create — auth.json holds the refresh_token, so never leave a
     # world/group-readable window between write and chmod. fchmod covers the
@@ -281,4 +361,5 @@ def login(*, log=lambda m: None, timeout: float = 300.0) -> dict:
     os.fchmod(fd, 0o600)
     with os.fdopen(fd, "w") as f:
         f.write(json.dumps(out, indent=2) + "\n")
+    logger.info("sign-in completed")
     return out

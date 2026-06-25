@@ -46,6 +46,7 @@ app = modal.App("marlin-vllm")
 @modal.concurrent(max_inputs=8)
 @modal.web_server(port=PORT, startup_timeout=15 * MINUTES)
 def serve():
+    """Launch the hosted vLLM server inside Modal."""
     import os
     import subprocess
 
@@ -53,12 +54,22 @@ def serve():
     # (a pure subclass of Qwen3_5ForConditionalGeneration in remote code);
     # map it to vLLM's native implementation.
     cmd = [
-        "vllm", "serve", MODEL, "--host", "0.0.0.0", "--port", str(PORT),
-        "--max-num-seqs", "8",
+        "vllm",
+        "serve",
+        MODEL,
+        "--host",
+        "0.0.0.0",
+        "--port",
+        str(PORT),
+        "--max-num-seqs",
+        "8",
         # 30s/480p chunks need a few k tokens; capping far below the 262k
         # qwen3_5 default frees VRAM for KV cache and speeds startup.
-        "--max-model-len", "32768",
-        "--api-key", os.environ["MARLIN_SERVER_KEY"],
-        "--hf-overrides", '{"architectures": ["Qwen3_5ForConditionalGeneration"]}',
+        "--max-model-len",
+        "32768",
+        "--api-key",
+        os.environ["MARLIN_SERVER_KEY"],
+        "--hf-overrides",
+        '{"architectures": ["Qwen3_5ForConditionalGeneration"]}',
     ]
     subprocess.Popen(cmd, env=os.environ.copy())

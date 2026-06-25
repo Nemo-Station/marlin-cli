@@ -21,7 +21,6 @@ from pathlib import Path
 import httpx
 from openai import OpenAI
 
-from .config import Config
 from .contract import (
     CAPTION_DETAIL_PROMPT,
     CAPTION_PROMPT,
@@ -31,6 +30,10 @@ from .contract import (
     parse_span,
     strip_thinking,
 )
+from .logging import get_logger
+from .models import Config
+
+logger = get_logger("backend")
 
 _MIME = {
     ".mp4": "video/mp4",
@@ -43,12 +46,28 @@ _MIME = {
 
 
 def probe(base_url: str, api_key: str = "", timeout: float = 3.0) -> bool:
-    """True if an OpenAI-compatible server answers at base_url."""
+    """Return whether an OpenAI-compatible server answers.
+
+    Parameters
+    ----------
+    base_url
+        OpenAI-compatible API base URL.
+    api_key
+        Optional bearer token.
+    timeout
+        Request timeout in seconds.
+
+    Returns
+    -------
+    bool
+        ``True`` when the server responds with an acceptable status code.
+    """
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     try:
         r = httpx.get(f"{base_url.rstrip('/')}/models", headers=headers, timeout=timeout)
         return r.status_code in (200, 401, 403) if api_key == "" else r.status_code == 200
-    except httpx.HTTPError:
+    except httpx.HTTPError as exc:
+        logger.debug("server probe failed for {}: {}", base_url, exc)
         return False
 
 
@@ -72,21 +91,50 @@ def _have_ffmpeg() -> bool:
     return bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
 
 
-def _probe_dims(path: Path) -> "tuple[int, int] | None":
+def _probe_dims(path: Path) -> tuple[int, int] | None:
     try:
         out = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=width,height", "-of", "csv=s=x:p=0", str(path)],
-            capture_output=True, text=True, timeout=20, stdin=subprocess.DEVNULL).stdout.strip()
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height",
+                "-of",
+                "csv=s=x:p=0",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            stdin=subprocess.DEVNULL,
+        ).stdout.strip()
         w, h = (int(x) for x in out.split("x")[:2])
         return (w, h) if w > 0 and h > 0 else None
-    except Exception:
+    except Exception as exc:
+        logger.debug("could not probe video dimensions for {}: {}", path, exc)
         return None
 
 
-def _target(w: int, h: int, max_pixels: int) -> "tuple[int, int] | None":
-    """smart_resize (downscale path), rounded to the patch factor — mirrors the
-    model. None if already within budget (don't upscale)."""
+def _target(w: int, h: int, max_pixels: int) -> tuple[int, int] | None:
+    """Return the model-compatible downscaled resolution.
+
+    Parameters
+    ----------
+    w
+        Source width.
+    h
+        Source height.
+    max_pixels
+        Per-frame pixel budget.
+
+    Returns
+    -------
+    tuple[int, int] | None
+        Target width and height, or ``None`` when no downscale is needed.
+    """
     if w * h <= max_pixels:
         return None
     beta = math.sqrt(w * h / max_pixels)
@@ -95,12 +143,25 @@ def _target(w: int, h: int, max_pixels: int) -> "tuple[int, int] | None":
     return w2, h2
 
 
-def downscale_proxy(path: Path, max_pixels: int = VIDEO_MAX_PIXELS,
-                    fps: float = VIDEO_FPS) -> "tuple[Path, str | None]":
-    """Return (path_to_send, note). Re-encodes a small proxy at the model's pixel
-    budget + fps; falls back to the original (note=None) if ffmpeg is missing,
-    dims are unknown, the clip is already within budget, or the encode fails.
-    When note is set the returned path is a temp file — caller deletes its parent."""
+def downscale_proxy(
+    path: Path, max_pixels: int = VIDEO_MAX_PIXELS, fps: float = VIDEO_FPS
+) -> tuple[Path, str | None]:
+    """Create a small proxy video when the source exceeds the model budget.
+
+    Parameters
+    ----------
+    path
+        Source video path.
+    max_pixels
+        Per-frame pixel budget.
+    fps
+        Sampling frame rate for the proxy.
+
+    Returns
+    -------
+    tuple[Path, str | None]
+        Path to send to inference and an optional human-readable resize note.
+    """
     if not _have_ffmpeg():
         return path, None
     dims = _probe_dims(path)
@@ -114,24 +175,63 @@ def downscale_proxy(path: Path, max_pixels: int = VIDEO_MAX_PIXELS,
     tmp = Path(tempfile.mkdtemp(prefix="marlin_proxy_")) / f"{path.stem}.mp4"
     try:
         subprocess.run(
-            ["ffmpeg", "-y", "-loglevel", "error", "-i", str(path),
-             "-vf", f"scale={w2}:{h2},fps={fps}", "-c:v", "libx264", "-preset", "veryfast",
-             "-crf", "28", "-pix_fmt", "yuv420p", "-an", str(tmp)],
-            check=True, stdin=subprocess.DEVNULL)
-    except Exception:
+            [
+                "ffmpeg",
+                "-y",
+                "-loglevel",
+                "error",
+                "-i",
+                str(path),
+                "-vf",
+                f"scale={w2}:{h2},fps={fps}",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "28",
+                "-pix_fmt",
+                "yuv420p",
+                "-an",
+                str(tmp),
+            ],
+            check=True,
+            stdin=subprocess.DEVNULL,
+        )
+    except Exception as exc:
+        logger.warning("failed to create downscale proxy for {}: {}", path, exc)
         shutil.rmtree(tmp.parent, ignore_errors=True)
         return path, None
     return tmp, f"{w}×{h} → {w2}×{h2}"
 
 
 class Marlin:
-    def __init__(self, cfg: Config, max_pixels: int = VIDEO_MAX_PIXELS,
-                 fps: float = VIDEO_FPS, full_res: bool = False):
+    """OpenAI-compatible Marlin inference client.
+
+    Parameters
+    ----------
+    cfg
+        Runtime configuration.
+    max_pixels
+        Per-frame pixel budget used for optional client-side downscaling.
+    fps
+        Video sampling frame rate.
+    full_res
+        Whether to bypass client-side downscaling.
+    """
+
+    def __init__(
+        self,
+        cfg: Config,
+        max_pixels: int = VIDEO_MAX_PIXELS,
+        fps: float = VIDEO_FPS,
+        full_res: bool = False,
+    ):
         self.cfg = cfg
         self.max_pixels = max_pixels
         self.fps = fps
         self.full_res = full_res
-        self.last_note: "str | None" = None  # set per _ask (e.g. "1920×832 → 672×288")
+        self.last_note: str | None = None  # set per _ask (e.g. "1920×832 → 672×288")
         self.client = OpenAI(
             base_url=cfg.base_url,
             api_key=cfg.resolved_api_key,
@@ -140,34 +240,74 @@ class Marlin:
         )
 
     def _ask(self, video: Path, prompt: str, max_tokens: int = 1024) -> str:
-        send, note = (video, None) if self.full_res else downscale_proxy(video, self.max_pixels, self.fps)
+        send, note = (
+            (video, None) if self.full_res else downscale_proxy(video, self.max_pixels, self.fps)
+        )
         self.last_note = note
+        if note:
+            logger.info("using downscaled video proxy: {}", note)
         try:
             resp = self.client.chat.completions.create(
                 model=self.cfg.model,
-                messages=[{
-                    "role": "user",
-                    "content": [_video_part(send), {"type": "text", "text": prompt}],
-                }],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [_video_part(send), {"type": "text", "text": prompt}],
+                    }
+                ],
                 temperature=0.0,
                 max_tokens=max_tokens,
             )
             return strip_thinking(resp.choices[0].message.content or "")
+        except Exception:
+            logger.exception("model request failed")
+            raise
         finally:
             if note and send != video:  # delete the temp proxy
                 shutil.rmtree(send.parent, ignore_errors=True)
 
     def caption_events(self, video: Path) -> tuple[str, list[Event], str]:
-        """Dense caption → (scene paragraph, per-event rows, raw text)."""
+        """Return a scene description, parsed events, and raw model text.
+
+        Parameters
+        ----------
+        video
+            Clip to caption.
+
+        Returns
+        -------
+        tuple[str, list[Event], str]
+            Scene paragraph, parsed event rows, and raw response text.
+        """
         raw = self._ask(video, CAPTION_PROMPT)
         scene, events = parse_caption(raw)
         return scene, events, raw
 
     def caption(self, video: Path) -> str:
+        """Return one free-form dense caption paragraph.
+
+        Parameters
+        ----------
+        video
+            Clip to caption.
+        """
         return self._ask(video, CAPTION_DETAIL_PROMPT)
 
     def ground(self, video: Path, query: str) -> tuple[tuple[float, float], str]:
-        """Locate `query` in a clip → ((start_s, end_s) relative to clip, tier)."""
+        """Locate a query inside a clip.
+
+        Parameters
+        ----------
+        video
+            Clip to search.
+        query
+            Natural-language event description.
+
+        Returns
+        -------
+        tuple[tuple[float, float], str]
+            Relative ``(start, end)`` span and parser tier.
+        """
         raw = self._ask(video, GROUND_PROMPT.format(query=query), max_tokens=64)
         span, tier = parse_span(raw)
         return (span, tier)
