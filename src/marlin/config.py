@@ -11,6 +11,8 @@ import json
 import os
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from .models import Config
 
 CONFIG_DIR = Path(os.environ.get("MARLIN_HOME", Path.home() / ".marlin"))
@@ -29,11 +31,8 @@ def load() -> Config:
     cfg = Config()
     if CONFIG_FILE.is_file():
         try:
-            data = json.loads(CONFIG_FILE.read_text())
-            for k, v in data.items():
-                if hasattr(cfg, k):
-                    setattr(cfg, k, v)
-        except json.JSONDecodeError:
+            cfg = Config.model_validate(json.loads(CONFIG_FILE.read_text()))
+        except (json.JSONDecodeError, ValidationError):
             pass
     # Env always wins — the non-interactive/agent path.
     if os.environ.get("MARLIN_BASE_URL"):

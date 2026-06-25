@@ -43,6 +43,8 @@ class Config(BaseModel):
         Forward-compatible extension bag.
     """
 
+    model_config = ConfigDict(validate_assignment=True)
+
     mode: str = "local"
     base_url: str = "http://localhost:8000/v1"
     api_key: str = ""

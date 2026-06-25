@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  checks:
+    name: Checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      - name: Ruff format
+        run: uv run ruff format --check .
+
+      - name: Contract tests
+        run: uv run python tests/test_contract.py
+
+      - name: Smoke test JSON stdout
+        run: |
+          MARLIN_LOG_STDERR=1 MARLIN_LOG_LEVEL=DEBUG uv run marlin --json version > /tmp/marlin-version.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("/tmp/marlin-version.json").read_text())
+          assert set(payload) == {"version"}
+          assert isinstance(payload["version"], str) and payload["version"]
+          PY
