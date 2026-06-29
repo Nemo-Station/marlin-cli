@@ -418,7 +418,8 @@ def caption(
         console.print()
 
     emit(result, human)
-# ── visualizer ────────────────────────────────────────────────────────────
+
+    # ── visualizer ──────────────────────────────────────────────────────────
     if view and not detail and result.get("events"):
         from .visualizer import generate_and_open
 
@@ -431,7 +432,7 @@ def caption(
 
 @app.command()
 def find(
-    video: str = typer.Argument(..., help="A video file (auto-chunked if longer than 2 min)."),
+    video: str = typer.Argument(..., help="A video file; long videos are auto-chunked."),
     query: str = typer.Argument(..., help="What to locate, in plain language."),
     max_pixels: int = typer.Option(
         200704,
@@ -446,17 +447,17 @@ def find(
         False, "--view", help="Generate an interactive HTML visualizer and open it."
     ),
     chunk_seconds: float = typer.Option(
-        120.0,
+        30.0,
         "--chunk-seconds",
-        help="Duration of each video chunk in seconds for long videos.",
+        help="Chunk window (s) for long videos; keep <=30 for accurate timestamps.",
     ),
     overlap: float = typer.Option(
-        10.0,
+        5.0,
         "--overlap",
-        help="Overlap duration between consecutive chunks in seconds.",
+        help="Overlap (s) between consecutive chunks.",
     ),
 ):
-    """Find when an event happens in a video clip (auto-chunks if >2 min)."""
+    """Find when an event happens in a video (auto-chunks videos longer than the chunk window)."""
     from .backend import Marlin
 
     cfg, path = _ready_clip(video)
@@ -464,9 +465,8 @@ def find(
 
     def _on_chunk(idx, total, c_start, c_end):
         if not is_json():
-            console.print(
-                f"  [muted]chunk {idx + 1}/{total}  "
-                f"{c_start:.0f}s\u2013{c_end:.0f}s[/muted]"
+            err_console.print(
+                f"  [muted]chunk {idx + 1}/{total}  {c_start:.0f}s\u2013{c_end:.0f}s[/muted]"
             )
 
     try:
