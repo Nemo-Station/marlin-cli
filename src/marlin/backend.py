@@ -9,18 +9,17 @@ vLLM's Qwen3-VL path compresses timestamps on long videos (vllm#30847);
 short clips ground correctly and match Marlin's training distribution.
 """
 
-
 from __future__ import annotations
-from marlin.video_processor import OVERLAP_SECONDS
-from marlin.video_processor import CHUNK_SECONDS
+
 import base64
 import math
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import httpx
 from openai import OpenAI
@@ -36,6 +35,7 @@ from .contract import (
 )
 from .logging import get_logger
 from .models import Config
+from .video_processor import CHUNK_SECONDS, OVERLAP_SECONDS
 
 logger = get_logger("backend")
 
@@ -361,7 +361,11 @@ class Marlin:
         except Exception:
             duration = None
 
-        chunked = duration is not None and duration > CHUNK_SECONDS
+        # Chunk whenever the video exceeds the *requested* window, so a custom
+        # --chunk-seconds actually takes effect (the module default is only the
+        # fallback). Using the constant here would silently ignore the flag for
+        # any video between chunk_seconds and CHUNK_SECONDS.
+        chunked = duration is not None and duration > chunk_seconds
 
         if chunked:
             long_result = find_in_long_video(
@@ -386,12 +390,14 @@ class Marlin:
         found = tier != "no_match"
         events = []
         if found:
-            events.append({
-                "global_start": round(start, 2),
-                "global_end": round(end, 2),
-                "description": query,
-                "chunk_id": 0,
-            })
+            events.append(
+                {
+                    "global_start": round(start, 2),
+                    "global_end": round(end, 2),
+                    "description": query,
+                    "chunk_id": 0,
+                }
+            )
         return GroundResult(
             events=events,
             found=found,
