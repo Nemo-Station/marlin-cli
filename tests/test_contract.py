@@ -117,19 +117,21 @@ class _FakeMarlin:
         self,
         video,
         query,
-        *,
         on_chunk_start=None,
-        chunk_seconds=120.0,
-        overlap_seconds=10.0,
+        chunk_seconds=30.0,
+        overlap_seconds=5.0,
     ):
         from marlin.backend import GroundResult
+
         return GroundResult(
-            events=[{
-                "global_start": 4.0,
-                "global_end": 6.25,
-                "description": query,
-                "chunk_id": 0,
-            }],
+            events=[
+                {
+                    "global_start": 4.0,
+                    "global_end": 6.25,
+                    "description": query,
+                    "chunk_id": 0,
+                }
+            ],
             found=True,
             duration=None,
             chunked=False,

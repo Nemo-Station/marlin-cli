@@ -7,7 +7,7 @@ PYTHONPATH=src python3 tests/test_visualizer.py
 import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 # Insert src directory to path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -24,11 +24,12 @@ def test_visualizer_defaults():
         {"start": 5.0, "end": 8.0, "text": "a cat runs"},
     ]
 
-    with patch("webbrowser.open") as mock_open, \
-         patch("marlin.video_processor.probe_duration_seconds", return_value=15.0), \
-         patch("marlin.output.is_json", return_value=True), \
-         tempfile.TemporaryDirectory() as td:
-
+    with (
+        patch("webbrowser.open") as mock_open,
+        patch("marlin.video_processor.probe_duration_seconds", return_value=15.0),
+        patch("marlin.output.is_json", return_value=True),
+        tempfile.TemporaryDirectory() as td,
+    ):
         temp_home = Path(td)
         with patch("marlin.config.CONFIG_DIR", temp_home):
             generate_and_open(
@@ -58,11 +59,15 @@ def test_visualizer_fallback_duration():
         {"start": 1.0, "end": 12.5, "text": "some event"},
     ]
 
-    with patch("webbrowser.open") as mock_open, \
-         patch("marlin.video_processor.probe_duration_seconds", side_effect=Exception("Probe failed")), \
-         patch("marlin.output.is_json", return_value=True), \
-         tempfile.TemporaryDirectory() as td:
-
+    with (
+        patch("webbrowser.open"),
+        patch(
+            "marlin.video_processor.probe_duration_seconds",
+            side_effect=Exception("Probe failed"),
+        ),
+        patch("marlin.output.is_json", return_value=True),
+        tempfile.TemporaryDirectory() as td,
+    ):
         temp_home = Path(td)
         with patch("marlin.config.CONFIG_DIR", temp_home):
             generate_and_open(
@@ -70,13 +75,49 @@ def test_visualizer_fallback_duration():
                 events=dummy_events,
                 query="Dense Captioning",
             )
-            
+
             expected_html_path = temp_home / "views" / "marlin_caption_nonexistent.html"
             assert expected_html_path.exists()
-            
+
             html_content = expected_html_path.read_text(encoding="utf-8")
             # 12.5 (max end) + 1.0 = 13.5
             assert "13.5" in html_content
+
+
+def test_visualizer_escapes_script_breakout():
+    """A query containing </script> must not break out of the data <script>."""
+    with (
+        patch("webbrowser.open"),
+        patch("marlin.video_processor.probe_duration_seconds", return_value=10.0),
+        patch("marlin.output.is_json", return_value=True),
+        tempfile.TemporaryDirectory() as td,
+    ):
+        temp_home = Path(td)
+        with patch("marlin.config.CONFIG_DIR", temp_home):
+            generate_and_open(
+                video_path=Path("clip.mp4"),
+                events=[
+                    {
+                        "global_start": 1.0,
+                        "global_end": 2.0,
+                        "description": "evil</script><img src=x onerror=alert(1)>",
+                    }
+                ],
+                query="find</script><script>alert(1)</script>",
+            )
+            html = (temp_home / "views" / "marlin_find_clip.html").read_text(encoding="utf-8")
+            # The injected closing tag must be escaped (<\/script>), never raw.
+            assert "evil</script>" not in html
+            assert "<\\/script>" in html
+
+
+def test_visualizer_template_has_file_picker():
+    """The file-picker fallback element must exist (it was dead/missing before)."""
+    from marlin.visualizer import TEMPLATE_PATH
+
+    tpl = TEMPLATE_PATH.read_text(encoding="utf-8")
+    assert 'id="local-file-input"' in tpl
+    assert "getElementById('local-file-input')" in tpl
 
 
 if __name__ == "__main__":
