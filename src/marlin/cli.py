@@ -174,8 +174,8 @@ def _do_setup(
             eng = rec  # mlx
         else:
             err_console.print(
-                "  [warn]Apple Silicon only for now[/warn] — Marlin's CLI ships the "
-                "Metal (MLX) build, which needs an Apple-Silicon Mac."
+                "   [warn]Apple Silicon only for now[/warn] — Marlin's CLI ships the "
+                "Metal (MLX) build, which needs an Apple-Silicon Mac"
             )
             if detected == "nvidia":
                 err_console.print(
@@ -431,7 +431,7 @@ def caption(
 
 @app.command()
 def find(
-    video: str = typer.Argument(..., help="A single video file (a bounded clip, ~≤2 min)."),
+    video: str = typer.Argument(..., help="A video file (auto-chunked if longer than 2 min)."),
     query: str = typer.Argument(..., help="What to locate, in plain language."),
     max_pixels: int = typer.Option(
         200704,
@@ -445,47 +445,88 @@ def find(
     view: bool = typer.Option(
         False, "--view", help="Generate an interactive HTML visualizer and open it."
     ),
+    chunk_seconds: float = typer.Option(
+        120.0,
+        "--chunk-seconds",
+        help="Duration of each video chunk in seconds for long videos.",
+    ),
+    overlap: float = typer.Option(
+        10.0,
+        "--overlap",
+        help="Overlap duration between consecutive chunks in seconds.",
+    ),
 ):
-    """Find when one event happens in one video clip."""
+    """Find when an event happens in a video clip (auto-chunks if >2 min)."""
     from .backend import Marlin
 
     cfg, path = _ready_clip(video)
     m = Marlin(cfg, max_pixels=max_pixels, fps=fps, full_res=full_res)
+
+    def _on_chunk(idx, total, c_start, c_end):
+        if not is_json():
+            console.print(
+                f"  [muted]chunk {idx + 1}/{total}  "
+                f"{c_start:.0f}s\u2013{c_end:.0f}s[/muted]"
+            )
+
     try:
         with spinner("finding the moment", fish=True):
-            (start, end), tier = m.ground(path, query)
+            gr = m.ground_video(
+                path,
+                query,
+                on_chunk_start=_on_chunk,
+                chunk_seconds=chunk_seconds,
+                overlap_seconds=overlap,
+            )
     except Exception as e:
         logger.exception("find command failed")
         message = str(e)
         emit({"error": message}, lambda: err_console.print(f"[err]{message}[/err]"))
         raise typer.Exit(1) from None
+
     if m.last_note and not is_json():
         err_console.print(
-            f"  [muted]↓ auto-downscaled {m.last_note} for speed/memory — "
+            f"  [muted]\u2193 auto-downscaled {m.last_note} for speed/memory \u2014 "
             "--full-res to keep it[/muted]"
         )
 
-    found = tier != "no_match"
     result = {
         "video": str(path),
         "query": query,
-        "start": start,
-        "end": end,
-        "found": found,
-        "tier": tier,
+        "events": gr.events,
+        "found": gr.found,
     }
+    if not gr.chunked:
+        result.update({"start": gr.start, "end": gr.end, "tier": gr.tier})
+    if gr.duration:
+        result["duration"] = gr.duration
 
     def human():
         console.print()
-        if found:
-            console.print(f"  [bold]{start:.1f}s → {end:.1f}s[/bold]  [muted]{path.name}[/muted]")
-            console.print(f"  [muted]“{query}”[/muted]\n")
+        if gr.found:
+            for i, ev in enumerate(gr.events):
+                console.print(
+                    f"  [bold]#{i + 1}  {ev['global_start']:.1f}s \u2192 "
+                    f"{ev['global_end']:.1f}s[/bold]"
+                )
+            console.print(f"\n  [muted]{path.name} \u00b7 \u201c{query}\u201d[/muted]\n")
         else:
             console.print(
-                f"  [warn]not found[/warn] — “{query}” didn't match anything in {path.name}\n"
+                f"  [warn]not found[/warn] \u2014 \u201c{query}\u201d didn\u2019t match "
+                f"anything in {path.name}\n"
             )
 
     emit(result, human)
+
+    if view and gr.found:
+        from .visualizer import generate_and_open
+
+        generate_and_open(
+            video_path=path,
+            events=gr.events,
+            query=query,
+            duration=gr.duration,
+        )
 
 
 @app.command()

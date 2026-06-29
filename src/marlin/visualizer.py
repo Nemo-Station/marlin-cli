@@ -5,15 +5,11 @@ opens it in the default browser.
 """
 
 from __future__ import annotations
-
 import json
 import webbrowser
 from pathlib import Path
-
 from .models.media import Event
-
 TEMPLATE_PATH = Path(__file__).parent / "templates/view"
-
 
 def generate_and_open(
     video_path: Path,
@@ -26,7 +22,7 @@ def generate_and_open(
     """Generate the HTML visualizer dashboard and open it in a browser."""
     if duration is None:
         try:
-            from .chunk import probe_duration_seconds
+            from .video_processor import probe_duration_seconds
             duration = probe_duration_seconds(video_path)
         except Exception:
             max_end = 0.0
